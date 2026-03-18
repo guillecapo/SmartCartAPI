@@ -1,6 +1,0 @@
-logging:
-  level:
-    com.msd.smartcart: WARN
-
-server:
-  port: ${PORT:8080}
