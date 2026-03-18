@@ -1,0 +1,19 @@
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6370
+
+    mongodb:
+      uri: mongodb://localhost:27017/smartcart_test
+
+  rabbitmq:
+    host: localhost
+
+security:
+  jwt:
+    secret: test-secret-key-for-testing-only-minimum-256-bits
+
+logging:
+  level:
+    com.msd.smartcart: DEBUG

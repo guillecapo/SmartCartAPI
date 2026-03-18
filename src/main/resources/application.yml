@@ -1,0 +1,44 @@
+spring:
+  application:
+    name: smartcart
+
+  # Redis
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+    # MongoDB
+    mongodb:
+      uri: ${MONGODB_URI:mongodb://localhost:27017/smartcart}
+
+  # RabbitMQ
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:guest}
+    password: ${RABBITMQ_PASSWORD:guest}
+    virtual-host: /
+
+# JWT
+security:
+  jwt:
+    secret: ${JWT_SECRET:local-dev-secret-key-minimum-256-bits-long}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}  # 24h
+
+# Logging
+logging:
+  level:
+    com.msd.smartcart: INFO
+
+# Servidor
+server:
+  port: 8080
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+  api-docs:
+    path: /v3/api-docs
