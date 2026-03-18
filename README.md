@@ -1,108 +1,115 @@
 # SmartCart API
-API de carrito de compras construida con arquitectura hexagonal, diseñada para escalar y mantener separación estricta entre dominio, aplicación e infraestructura.
 
-## Stack
-
-- Java 21 — LTS, records, sealed interfaces, pattern matching
-- Spring Boot 3.3
-- Redis — carritos activos (TTL 24h)
-- MongoDB — backup de carritos y órdenes
-- RabbitMQ — notificaciones event-driven
-- ULID — IDs ordenables cronológicamente
-
-## Arquitectura
-```
-domain/          → Modelos, errores, ports (sin dependencias externas)
-application/     → Orquestación de casos de uso (sin imports de infraestructura)
-infrastructure/  → Adapters de entrada y salida (HTTP, Redis, MongoDB, RabbitMQ)
-shared/          → Result, AppError, excepciones de dominio
-```
-El dominio no conoce Spring, Redis, ni MongoDB. Si mañana cambias Redis por Memcached, solo tocas el adapter.
-
-## Decisiones arquitectónicas
-
-### ¿Por qué persistencia dual Redis + MongoDB?
-Redis es la fuente de verdad para carritos activos — lecturas/escrituras en O(1), TTL nativo de 24h. MongoDB entra solo como backup cuando `totalValue > $500` OR `itemCount > 20`, porque perder un carrito de $10 es aceptable, perder uno de $800 no lo es.
-
-**Trade-off aceptado:** Carritos que nunca superan los umbrales y expiran en Redis se pierden permanentemente. El usuario debe reconstruirlo. Decisión validada con negocio.
-
-Orden de escritura:
-1. Redis primero — si falla, aborta y retorna error
-2. MongoDB segundo — best-effort, si falla loguea y continúa
-
-### ¿Por qué validación lazy de stock?
-El stock se valida únicamente en checkout, no al agregar productos al carrito. Esto reduce latencia en `addItem` y evita consultas innecesarias — el inventario puede cambiar entre que el usuario agrega un producto y confirma la compra de todas formas.
-
-**Trade-off aceptado:** El usuario puede agregar productos sin stock al carrito. En checkout el sistema auto-corrige removiendo los productos no disponibles y notifica al usuario qué fue removido para que decida si procede.
-
-### ¿Por qué auto-corrección en checkout?
-Cuando hay productos sin stock, el sistema los remueve automáticamente del carrito y devuelve `CheckoutResult.OutOfStock` con la lista de productos removidos. El cliente reintenta manualmente — no procesamos automáticamente con los items restantes porque es decisión del usuario si acepta comprar menos de lo que eligió.
-
-### ¿Por qué ULID para orderId?
-ULID embebe un timestamp en los primeros 48 bits, lo que lo hace lexicográficamente ordenable. Ordenar órdenes por fecha no requiere campo `createdAt` separado ni índice adicional en MongoDB. Los índices son más compactos porque los IDs son secuenciales.
-
-UUID se usa para `cartId` — los carritos no necesitan ordenamiento cronológico.
-
-### ¿Por qué excepciones de dominio en lugar de excepciones de Spring?
-```java
-// ❌ Esto acopla la capa de aplicación a Spring Data
-catch (DuplicateKeyException e) { ... }
-
-// ✅ El adapter traduce, el servicio no sabe qué tecnología falló
-catch (DuplicateOrderException e) { ... }
-```
-`InfrastructureException` y `DuplicateOrderException` viven en `shared/exception/` — son contratos de dominio, no de infraestructura. Si cambias MongoDB por PostgreSQL, `CheckoutService` no se entera.
-
-### ¿Por qué idempotency key en addItem y checkout?
-`addItem` es aditivo — si el cliente reintenta sin idempotency key, el producto se duplica en el carrito. La key garantiza que un retry devuelve la respuesta cacheada sin re-ejecutar la operación.
-
-**Contrato documentado:** El cliente debe reutilizar la misma key en cada retry. Si genera una key nueva, el sistema no puede detectar el duplicado.
-
-### ¿Por qué RabbitMQ y no Kafka para notificaciones?
-Las notificaciones de orden confirmada son eventos de un solo consumidor, no requieren replay ni retención de historial. RabbitMQ con Dead Letter Queue y backoff exponencial (1s → 2s → 4s, 3 intentos) es suficiente y operacionalmente más simple.
-
-**Kafka sería correcto si:** múltiples servicios necesitaran consumir el mismo evento, o si necesitáramos replay de eventos históricos.
+Production-ready shopping cart API built with **Hexagonal Architecture**, **Domain-Driven Design** principles and **Spec-Driven Development** — the API contract is defined via OpenAPI 3.0 and served through Swagger UI, ensuring the spec is the single source of truth for all consumers.
 
 ---
 
-## Flujo de checkout
-```
-1. Obtener carrito activo (Redis)
-2. Validar carrito no vacío
-3. Validar stock de TODOS los items — lazy, en paralelo
-4. Si hay productos sin stock → auto-corregir carrito → OutOfStock
-5. Persistir orden en MongoDB
-6. Limpiar carrito en Redis
-7. Publicar OrderConfirmedEvent a RabbitMQ (best-effort)
-8. Retornar Confirmed
-```
+## 📖 API Specification
 
-## Manejo de fallos
+Once running, the full interactive API spec is available at:
 
-| Componente | Fallo | Comportamiento |
-|---|---|---|
-| Redis (lectura) | InfrastructureException | Aborta, retorna error |
-| Redis (escritura) | InfrastructureException | Aborta, retorna error |
-| MongoDB backup | Cualquier excepción | Log warn, continúa |
-| MongoDB orden | InfrastructureException | Aborta, retorna error |
-| RabbitMQ | Falla tras 3 reintentos | Persiste en DLQ, continúa |
-| AI Recommendations | Cualquier excepción | Log warn, continúa |
+| Resource | URL |
+|---|---|
+| Swagger UI | http://localhost:8080/swagger-ui.html |
+| OpenAPI JSON | http://localhost:8080/v3/api-docs |
+
+All endpoints, request/response schemas, error codes and idempotency contracts are documented in the spec.
 
 ---
 
-## Deuda técnica documentada
+## 🏗️ Architecture & Design
 
-**Carritos perdidos por TTL** — Carritos que nunca superan umbrales de backup y expiran en Redis no son recuperables. Si el negocio decide que esto es inaceptable, la solución es bajar los umbrales o persistir todos los carritos en MongoDB independientemente del valor.
+Built following **Ports & Adapters (Hexagonal Architecture)** — the domain is completely isolated from infrastructure. Swapping Redis for Memcached or MongoDB for PostgreSQL only touches the adapter layer.
 
-**Duplicado por clearCart fallido** — Si `clearCart` falla tras confirmar una orden, el usuario verá su carrito intacto y podría reintentar el checkout con una nueva idempotency key, generando una orden duplicada. Mitigación pendiente: job de limpieza de carritos huérfanos.
-
-**findByCartId en Redis** — `ActiveCartRepository` no soporta búsqueda por `cartId`, solo por `userId`. Si en el futuro se necesita, requiere un índice secundario en Redis (`cart:id:{cartId} → userId`).
-
-**AuthService acoplado a Spring Security** — `AuthService` en la capa de aplicación utiliza directamente `AuthenticationManager` y `PasswordEncoder` de Spring Security. Se evaluó abstraer estas dependencias detrás de ports propios pero se descartó. Ver ADR-001.
+Key engineering decisions documented as **Architecture Decision Records (ADRs)**:
+- Dual persistence strategy (Redis + MongoDB) with explicit threshold-based backup
+- Lazy stock validation with auto-correction at checkout
+- ULID for chronologically sortable order IDs
+- Idempotency keys on mutating operations
+- JWT authentication with conscious Spring Security coupling — pragmatic decision documented and justified
 
 ---
 
-## Architecture Decision Records
+## ⚙️ Stack
+
+| Layer | Technology |
+|---|---|
+| Language | Java 21 (records, sealed interfaces, pattern matching) |
+| Framework | Spring Boot 3.3 |
+| Active carts | Redis — source of truth, TTL 24h |
+| Persistence | MongoDB — cart backup + orders |
+| Messaging | RabbitMQ — event-driven notifications with DLQ |
+| Security | Spring Security + JWT (JJWT) |
+| API Spec | OpenAPI 3.0 / Swagger UI (springdoc) |
+| Infrastructure | Docker Compose |
+
+---
+
+## 🎯 Production-Ready Patterns
+
+- **Spec-Driven Development** — OpenAPI contract defined and served via Swagger UI
+- **Idempotency** — prevents duplicate cart operations and orders on client retries
+- **Best-effort pattern** — MongoDB backup and AI recommendations degrade gracefully without aborting the main flow
+- **Dead Letter Queue** — failed order notifications persist for reprocessing with exponential backoff (1s → 2s → 4s)
+- **Auto-correction at checkout** — out-of-stock items removed automatically, user notified with full detail
+- **Fail-fast on critical path** — Redis failures abort immediately, MongoDB backup failures are non-critical
+- **Result type** — railway-oriented error handling, no unchecked exceptions leaking across layers
+
+---
+
+## 📐 Key Architectural Decisions
+
+**Why Redis + MongoDB dual persistence?**
+Losing a $10 cart is acceptable. Losing an $800 cart is not. Redis handles all active carts in O(1) with native TTL. MongoDB backs up only carts exceeding $500 or 20 items.
+
+**Why lazy stock validation?**
+Inventory changes between add-to-cart and checkout anyway. Validating at add-item adds latency with no real guarantee — validate once at checkout and auto-correct.
+
+**Why ULID for order IDs?**
+Chronological ordering without a separate `createdAt` field or additional MongoDB index. Lexicographically sortable by design.
+
+**Why RabbitMQ over Kafka?**
+Single consumer, no replay needed. RabbitMQ + DLQ is operationally simpler and sufficient. Kafka would be correct if multiple services needed to consume the same event.
+
+---
+
+## 🚀 Running locally
+
+**1. Start infrastructure**
+```bash
+docker-compose up -d
+```
+
+**2. Seed products**
+```bash
+# PowerShell
+Get-Content scripts/seed-products.js | docker exec -i smartcart-mongodb mongosh
+
+# CMD
+docker exec -i smartcart-mongodb mongosh < scripts/seed-products.js
+```
+
+**3. Run the app**
+```bash
+./gradlew bootRun
+```
+
+**4. Open Swagger UI**
+```
+http://localhost:8080/swagger-ui.html
+```
+
+Register at `POST /auth/register`, copy the token, click **Authorize** and start testing. 🚀
+
+---
+
+## 📋 Documented Technical Debt
+
+All known limitations are explicitly documented — orphaned carts on failed `clearCart`, TTL-expired carts below backup threshold, and missing `findByCartId` index in Redis. Engineering is about knowing what you're trading off, not pretending trade-offs don't exist.
+
+---
+
+## 🏛️ Architecture Decision Records
 
 ### ADR-001: Spring Security como framework de autenticación y autorización
 
@@ -132,4 +139,4 @@ Se mantiene Spring Security directamente en `AuthService` sin abstracción de po
 - El cambio impactaría `AuthService`, `SecurityConfig`, `JwtAuthFilter` y `UserDetailsServiceImpl`
 
 #### Trade-off aceptado
-Pragmatismo y velocidad de entrega sobre pureza arquitectónica estricta. Decisión válida mientras Spring Security mantenga su robustez y soporte comunitario en el ecosistema Java.
+Pragmatismo y velocidad de entrega sobre pureza arquitectónica estricta. Decisión válida mientras Spring Security mantenga su robustez y soporte comunitario en el ecosistencia Java.
