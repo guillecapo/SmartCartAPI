@@ -24,6 +24,7 @@ public class CartService implements CartUseCase {
 
     private static final BigDecimal BACKUP_VALUE_THRESHOLD = new BigDecimal("500.00");
     private static final int BACKUP_ITEM_THRESHOLD = 20;
+    private static final int MAX_PRODUCTS = 50;
 
     private final ActiveCartRepository activeCartRepository;
     private final CartBackupRepository cartBackupRepository;
@@ -73,6 +74,9 @@ public class CartService implements CartUseCase {
                     existing.get().unitPrice()
             ));
         } else {
+
+            if (cart.items().size() >= MAX_PRODUCTS)
+                return Result.failure(CartError.CartOverflow.of(userId));
 
             Product product;
             try {
