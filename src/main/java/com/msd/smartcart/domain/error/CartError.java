@@ -8,7 +8,8 @@ public sealed interface CartError permits
         CartError.InvalidQuantity,
         CartError.EmptyCart,
         CartError.UnavailableProducts,
-        CartError.ProductNotFound {
+        CartError.ProductNotFound,
+        CartError.CartOverflow {
 
     record NotFound(String userId) implements CartError {
         public static AppError of(String userId) {
@@ -46,6 +47,13 @@ public sealed interface CartError permits
         public static AppError of(String productId) {
             return new AppError("cart.product_not_found",
                     "Product not found in catalog", productId);
+        }
+    }
+
+    record CartOverflow(String userId) implements CartError {
+        public static AppError of(String userId) {
+            return new AppError("cart.overflow",
+                    "Too many products for this cart", userId);
         }
     }
 }
