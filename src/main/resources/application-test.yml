@@ -12,7 +12,7 @@ spring:
 
 security:
   jwt:
-    secret: test-secret-key-for-testing-only-minimum-256-bits
+    secret: ${JWT_SECRET:test-secret-key-for-testing-only-minimum-256-bits}
 
 logging:
   level:
