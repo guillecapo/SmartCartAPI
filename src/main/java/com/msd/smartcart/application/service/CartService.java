@@ -56,7 +56,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.get.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -89,7 +89,7 @@ public class CartService implements CartUseCase {
                     }
                     default -> {
                         log.error("Unexpected error [productId={}] — {}", productId, e.getMessage(), e);
-                        yield Result.failure(AppError.persistence("product.get.failed", userId));
+                        throw e;
                     }
                 };
             }
@@ -116,7 +116,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.save.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -155,7 +155,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.get.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -178,7 +178,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.save.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -205,7 +205,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.get.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -227,7 +227,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.get.failed", userId));
+                    throw e;
                 }
             };
         }
@@ -247,7 +247,7 @@ public class CartService implements CartUseCase {
                 }
                 default -> {
                     log.error("Unexpected error [userId={}] — {}", userId, e.getMessage(), e);
-                    yield Result.failure(AppError.persistence("active.cart.delete.failed", userId));
+                    throw e;
                 }
             };
         }
