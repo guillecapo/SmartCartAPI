@@ -17,6 +17,8 @@ import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -45,10 +47,25 @@ public class CheckoutService implements CheckoutUseCase {
             log.warn("Checkout failed: empty cart [userId={}]", userId);
             return Result.failure(CartError.EmptyCart.of(userId));
         }
+        List<CheckoutResult.OutOfStockItem> outOfStockItems;
 
         // 3. Validar stock de todos los items — lazy, todos a la vez
-        List<CheckoutResult.OutOfStockItem> outOfStockItems = validateStock(cart);
-
+        try {
+            outOfStockItems = validateStock(cart);
+        } catch (Exception e) {
+            return switch (e) {
+                case InfrastructureException ex -> {
+                        log.error("Infrastructure failure validating stock [productsIds={}] — {}",
+                            cart.items().stream().map(CartItem::productId).toList(), ex.getMessage());
+                        yield Result.success(new CheckoutResult.InfrastructureFailure("products.infra.failed"));
+                }
+                default -> {
+                        log.error("Unexpected error validating stock [productsIds={}] — {}",
+                            cart.items().stream().map(CartItem::productId).toList(), e.getMessage(), e);
+                        yield Result.success(new CheckoutResult.InfrastructureFailure("products.get.failed"));
+                }
+            };
+        }
         // 4. Auto-corregir carrito si hay productos sin stock
         if (!outOfStockItems.isEmpty()) {
             log.info("Stock validation failed, auto-correcting cart [userId={}, removedItems={}]",
@@ -110,48 +127,37 @@ public class CheckoutService implements CheckoutUseCase {
     private List<CheckoutResult.OutOfStockItem> validateStock(Cart cart) {
         List<CheckoutResult.OutOfStockItem> outOfStock = new ArrayList<>();
 
-        cart.items().forEach(item -> {
-            try {
-                productRepository.findById(item.productId()).ifPresentOrElse(
-                        product -> {
-                            if (product.stock() < item.quantity()) {
-                                log.warn("Insufficient stock [productId={}, requested={}, available={}]",
-                                        item.productId(), item.quantity(), product.stock());
-                                outOfStock.add(new CheckoutResult.OutOfStockItem(
-                                        item.productId(),
-                                        item.name(),
-                                        item.quantity(),
-                                        product.stock()
-                                ));
-                            }
-                        },
-                        () -> {
-                            log.warn("Product no longer exists [productId={}]", item.productId());
-                            outOfStock.add(new CheckoutResult.OutOfStockItem(
-                                    item.productId(),
-                                    item.name(),
-                                    item.quantity(),
-                                    0
-                            ));
-                        }
-                );
-            } catch (Exception e) {
-                switch (e) {
-                    case InfrastructureException ex ->
-                            log.error("Infrastructure failure validating stock [productId={}] — {}",
-                                    item.productId(), ex.getMessage());
-                    default ->
-                            log.error("Unexpected error validating stock [productId={}] — {}",
-                                    item.productId(), e.getMessage(), e);
-                }
+        var resultProducts = productRepository.findAllByIds(
+                        cart.items()
+                                .stream()
+                                .map(CartItem::productId)
+                                .toList())
+                .stream()
+                .collect(Collectors.toMap(Product::productId, t -> t));
+
+        for (CartItem product : cart.items()) {
+            var savedProduct = resultProducts.get(product.productId());
+            if (savedProduct == null){
+                log.warn("Product no longer exists [productId={}]", product.productId());
                 outOfStock.add(new CheckoutResult.OutOfStockItem(
-                        item.productId(),
-                        item.name(),
-                        item.quantity(),
+                        product.productId(),
+                        product.name(),
+                        product.quantity(),
                         0
                 ));
+                continue;
             }
-        });
+            if (product.quantity() > savedProduct.stock()) {
+                log.warn("Insufficient stock [productId={}, requested={}, available={}]",
+                        product.productId(), product.quantity(), savedProduct.stock());
+                outOfStock.add(new CheckoutResult.OutOfStockItem(
+                        product.productId(),
+                        product.name(),
+                        product.quantity(),
+                        savedProduct.stock()
+                ));
+            }
+        }
 
         return outOfStock;
     }
