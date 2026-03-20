@@ -16,9 +16,13 @@ The most important rule: **the domain knows nothing about infrastructure.**
 ## Package Structure
 
 com.msd.smartcart/
+
 ├── domain/          → Models, errors, ports — NO Spring, NO Redis, NO MongoDB
+
 ├── application/     → Use case orchestration — NO infrastructure imports
+
 ├── infrastructure/  → Adapters (HTTP, Redis, MongoDB, RabbitMQ) — Spring lives here
+
 └── shared/          → Result, AppError, domain exceptions
 
 ---
@@ -53,6 +57,21 @@ catch (DuplicateKeyException e) {
 throw new DuplicateOrderException();
 }
 
+Every adapter method MUST wrap all calls in try-catch blocks with at minimum:
+- Specific catch for known infrastructure exceptions (e.g. RedisConnectionFailureException)
+- Generic catch (Exception e) as last resort — always throws InfrastructureException, never swallows
+
+✅ Correct adapter pattern
+try {
+redisTemplate.opsForValue().set(key, json, TTL);
+} catch (RedisConnectionFailureException e) {
+log.error("Redis unavailable [userId={}] — {}", userId, e.getMessage(), e);
+throw new InfrastructureException("cart.redis.unavailable");
+} catch (Exception e) {
+log.error("Unexpected Redis failure [userId={}] — {}", userId, e.getMessage(), e);
+throw new InfrastructureException("cart.redis.save.failed");
+}
+
 ### 4. Error handling — use Result type, not exceptions
 
 ❌ NEVER throw business exceptions from services
@@ -78,6 +97,34 @@ log.warn("Backup failed (non-critical) — {}", e.getMessage());
 }
 
 RabbitMQ, AI recommendations — NON-CRITICAL: log and continue
+
+### 6. switch on Exception — always rethrow on default
+
+When using pattern matching switch on exceptions in services, the default branch
+MUST rethrow — never return a silent Result.failure. Unknown exceptions are handled
+by GlobalExceptionHandler, logged, and flagged for analysis.
+
+❌ NEVER swallow unknown exceptions silently
+default -> {
+log.error("Unexpected error — {}", e.getMessage(), e);
+yield Result.failure(AppError.persistence("unknown.error", userId)); // ← hides the problem
+}
+
+✅ ALWAYS rethrow on default — let GlobalExceptionHandler catch it
+default -> {
+log.error("Unexpected error — {}", e.getMessage(), e);
+throw e;
+}
+
+### 7. Secrets — never hardcode, always environment variables with fallback
+
+❌ NEVER hardcode secrets in any yml file
+secret: my-hardcoded-secret-key
+
+✅ ALWAYS use environment variable with explicit fallback
+secret: ${JWT_SECRET:local-dev-fallback-key-minimum-256-bits}
+
+This applies to ALL environments — local, test, prod. Consistency is non-negotiable.
 
 ---
 
@@ -142,6 +189,8 @@ Never log sensitive data — no passwords, no tokens, no full request bodies
 - @Transactional without explicit justification
 - Checked exceptions in service methods — use Result type instead
 - System.out.println — always use SLF4J logger
+- Hardcoded secrets in any yml file — use environment variables with fallback
+- Silent default branches in switch on Exception — always rethrow
 
 ---
 
@@ -150,6 +199,9 @@ Never log sensitive data — no passwords, no tokens, no full request bodies
 - [ ] No Spring/infrastructure imports in domain/ or application/
 - [ ] All repository access goes through a port interface
 - [ ] Infrastructure exceptions translated in adapters before reaching services
+- [ ] All adapter methods have try-catch covering InfrastructureException and generic Exception
+- [ ] switch on Exception has default that rethrows, never yields silently
+- [ ] No secrets hardcoded in any yml — environment variable with fallback
 - [ ] Critical path failures return Result.failure() — best-effort failures log and continue
 - [ ] New endpoints have @Operation, @ApiResponse and @Tag Swagger annotations
 - [ ] Structured logs with relevant context fields

@@ -27,6 +27,9 @@ Key engineering decisions documented as **Architecture Decision Records (ADRs)**
 - ULID for chronologically sortable order IDs
 - Idempotency keys on mutating operations
 - JWT authentication with conscious Spring Security coupling — pragmatic decision documented and justified
+- Cart product limit — max 50 distinct products to protect database at checkout
+- Batch stock validation — single MongoDB query at checkout regardless of cart size
+- Global exception handler — architectural safety net and observability canary
 
 ---
 
@@ -42,6 +45,7 @@ Key engineering decisions documented as **Architecture Decision Records (ADRs)**
 | Security | Spring Security + JWT (JJWT) |
 | API Spec | OpenAPI 3.0 / Swagger UI (springdoc) |
 | Infrastructure | Docker Compose |
+| Testing | JUnit 5 + Mockito + AssertJ + Testcontainers |
 
 ---
 
@@ -54,6 +58,9 @@ Key engineering decisions documented as **Architecture Decision Records (ADRs)**
 - **Auto-correction at checkout** — out-of-stock items removed automatically, user notified with full detail
 - **Fail-fast on critical path** — Redis failures abort immediately, MongoDB backup failures are non-critical
 - **Result type** — railway-oriented error handling, no unchecked exceptions leaking across layers
+- **Cart product limit** — max 50 distinct products per cart, enforced at addItem
+- **Batch stock validation** — single MongoDB query at checkout, never N queries
+- **Global exception handler** — `@RestControllerAdvice` as architectural safety net
 
 ---
 
@@ -70,6 +77,15 @@ Chronological ordering without a separate `createdAt` field or additional MongoD
 
 **Why RabbitMQ over Kafka?**
 Single consumer, no replay needed. RabbitMQ + DLQ is operationally simpler and sufficient. Kafka would be correct if multiple services needed to consume the same event.
+
+**Why limit cart to 50 distinct products?**
+A single checkout triggers stock validation for every product in the cart. Without a limit, a cart with thousands of distinct products would generate a single massive MongoDB query, saturating the database. 50 is a deliberate trade-off — enough for any real shopping session, safe for the database under concurrent load.
+
+**Why batch stock validation instead of per-product queries?**
+N+1 queries at checkout is a classic production performance problem. `findAllByIds` resolves all products in one round-trip regardless of cart size, eliminating query amplification under load.
+
+**Why GlobalExceptionHandler as architectural canary?**
+`@RestControllerAdvice` is the last line of defense — it catches any exception that escapes the adapter and service layers without being translated. Beyond returning a structured `AppError` response to the client without leaking internal details, it serves as an observability signal: if hits appear in production logs, an adapter is not translating its exceptions correctly. Zero hits means the architecture is clean.
 
 ---
 
@@ -139,4 +155,46 @@ Se mantiene Spring Security directamente en `AuthService` sin abstracción de po
 - El cambio impactaría `AuthService`, `SecurityConfig`, `JwtAuthFilter` y `UserDetailsServiceImpl`
 
 #### Trade-off aceptado
-Pragmatismo y velocidad de entrega sobre pureza arquitectónica estricta. Decisión válida mientras Spring Security mantenga su robustez y soporte comunitario en el ecosistencia Java.
+Pragmatismo y velocidad de entrega sobre pureza arquitectónica estricta. Decisión válida mientras Spring Security mantenga su robustez y soporte comunitario en el ecosistema Java.
+
+### ADR-002: Cart product limit — max 50 distinct products
+
+**Fecha:** 2026
+**Estado:** Aceptado
+
+#### Contexto
+Sin límite en el número de productos distintos por carrito, un checkout con miles de productos generaría una consulta masiva a MongoDB, saturando la base de datos bajo carga concurrente.
+
+#### Decisión
+Máximo 50 productos distintos por carrito. La validación vive en `CartService.addItem()` — solo aplica al agregar un producto nuevo, no al incrementar cantidad de uno existente.
+
+#### Trade-off aceptado
+Suficiente para cualquier sesión de compra real. Protege la base de datos bajo carga concurrente.
+
+### ADR-003: Batch stock validation at checkout
+
+**Fecha:** 2026
+**Estado:** Aceptado
+
+#### Contexto
+La validación de stock original hacía una consulta a MongoDB por cada producto del carrito — patrón N+1 que amplifica la carga bajo concurrencia.
+
+#### Decisión
+`validateStock` usa `findAllByIds` para resolver todos los productos en una sola consulta, luego cruza en memoria con `Collectors.toMap`.
+
+#### Trade-off aceptado
+Ligero incremento en memoria (todos los productos en memoria simultáneamente) a cambio de eliminar la amplificación de queries. Con límite de 50 productos, el impacto en memoria es despreciable.
+
+### ADR-004: GlobalExceptionHandler como canary arquitectónico
+
+**Fecha:** 2026
+**Estado:** Aceptado
+
+#### Contexto
+Excepciones no traducidas en adapters podían escapar al controller, retornando 500 genérico sin estructura ni contexto.
+
+#### Decisión
+`GlobalExceptionHandler` con `@RestControllerAdvice` como última línea de defensa. Retorna `AppError` estructurado sin exponer detalles internos. Sirve además como señal de observabilidad — hits frecuentes indican un adapter con traducción de excepciones incompleta.
+
+#### Trade-off aceptado
+La malla de circo no reemplaza el manejo correcto en cada capa — es el indicador de que algo falló, no la solución permanente.
