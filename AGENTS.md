@@ -206,3 +206,5 @@ Never log sensitive data — no passwords, no tokens, no full request bodies
 - [ ] New endpoints have @Operation, @ApiResponse and @Tag Swagger annotations
 - [ ] Structured logs with relevant context fields
 - [ ] No sensitive data logged
+
+@ExcludeFromCoverage — only for no-business logic records. If the record has a new method implementation, remove it.

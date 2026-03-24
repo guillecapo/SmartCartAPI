@@ -42,3 +42,8 @@ springdoc:
     operationsSorter: method
   api-docs:
     path: /v3/api-docs
+
+# JaCoCo exclusion annotation
+jacoco:
+  excludes:
+    - "com.msd.smartcart.shared.annotation.ExcludeFromCoverage"
