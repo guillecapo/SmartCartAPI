@@ -27,3 +27,4 @@ replay_pid*
 .gradle
 build/
 repomix-output.xml
+smartcart-context.txt
