@@ -5,10 +5,12 @@ import com.msd.smartcart.domain.port.out.*;
 import com.msd.smartcart.shared.AppError;
 import com.msd.smartcart.shared.Result;
 import com.msd.smartcart.shared.exception.InfrastructureException;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.math.BigDecimal;
@@ -26,6 +28,7 @@ class CartServiceTest {
     @Mock private CartBackupRepository cartBackupRepository;
     @Mock private ProductRepository productRepository;
     @Mock private AiRecommenderPort aiRecommenderPort;
+    @Spy  private SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
 
     @InjectMocks
     private CartService cartService;

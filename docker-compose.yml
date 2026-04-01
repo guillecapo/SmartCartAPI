@@ -30,6 +30,22 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
 
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    container_name: smartcart-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./scripts/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  zipkin:
+    image: openzipkin/zipkin:3
+    container_name: smartcart-zipkin
+    ports:
+      - "9411:9411"
+
 volumes:
   mongodb_data:
   redis_data:
