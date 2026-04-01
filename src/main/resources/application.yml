@@ -43,6 +43,22 @@ springdoc:
   api-docs:
     path: /v3/api-docs
 
+# Observabilidad
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "health,info,prometheus,metrics"
+  metrics:
+    tags:
+      application: ${spring.application.name}
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}
+
 # JaCoCo exclusion annotation
 jacoco:
   excludes:

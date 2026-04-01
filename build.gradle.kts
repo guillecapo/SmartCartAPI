@@ -61,7 +61,12 @@ dependencies {
     runtimeOnly("io.jsonwebtoken:jjwt-jackson:0.12.6")
 
     // Swagger
-    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.16")
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0")
+
+    // Observabilidad: métricas (Prometheus) + trazas (OpenTelemetry → Zipkin)
+    runtimeOnly("io.micrometer:micrometer-registry-prometheus")
+    implementation("io.micrometer:micrometer-tracing-bridge-otel")
+    runtimeOnly("io.opentelemetry:opentelemetry-exporter-zipkin")
 
     // Test — JUnit 5 + Mockito + AssertJ via Spring Boot BOM
     testImplementation("org.springframework.boot:spring-boot-starter-test")

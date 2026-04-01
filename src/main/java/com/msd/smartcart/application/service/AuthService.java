@@ -44,7 +44,7 @@ public class AuthService {
                 request.email(),
                 request.fullName(),
                 passwordEncoder.encode(request.password()),
-                "ROLE_USER"
+                "USER"
         );
 
         userRepository.save(newUser);

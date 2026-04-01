@@ -10,6 +10,10 @@ import com.msd.smartcart.domain.port.out.AiRecommenderPort;
 import com.msd.smartcart.shared.AppError;
 import com.msd.smartcart.shared.Result;
 import com.msd.smartcart.shared.exception.InfrastructureException;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.observation.annotation.Observed;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -19,6 +23,7 @@ import java.util.Optional;
 
 @Slf4j
 @Service
+@Observed(name = "cart.service")   // crea span automático para cada método público
 @RequiredArgsConstructor
 public class CartService implements CartUseCase {
 
@@ -30,6 +35,7 @@ public class CartService implements CartUseCase {
     private final CartBackupRepository cartBackupRepository;
     private final ProductRepository productRepository;
     private final AiRecommenderPort aiRecommenderPort;
+    private final MeterRegistry meterRegistry;
 
     @Override
     public Result<Cart, AppError> addItem(String userId, String productId, int quantity) {
@@ -37,6 +43,7 @@ public class CartService implements CartUseCase {
         if (quantity <= 0) {
             log.warn("addItem rejected: invalid quantity [userId={}, productId={}, quantity={}]",
                     userId, productId, quantity);
+            cartError("invalid_quantity");
             return Result.failure(CartError.InvalidQuantity.of(quantity));
         }
 
@@ -75,8 +82,10 @@ public class CartService implements CartUseCase {
             ));
         } else {
 
-            if (cart.items().size() >= MAX_PRODUCTS)
+            if (cart.items().size() >= MAX_PRODUCTS) {
+                cartError("cart_overflow");
                 return Result.failure(CartError.CartOverflow.of(userId));
+            }
 
             Product product;
             try {
@@ -96,6 +105,7 @@ public class CartService implements CartUseCase {
 
             if (product == null) {
                 log.warn("addItem: product not found [userId={}, productId={}]", userId, productId);
+                cartError("product_not_found");
                 return Result.failure(CartError.ProductNotFound.of(productId));
             }
             updatedCart = cart.add(new CartItem(
@@ -127,14 +137,28 @@ public class CartService implements CartUseCase {
                 log.info("Cart exceeds threshold, persisting backup [userId={}, totalValue={}, itemCount={}]",
                         userId, updatedCart.totalValue(), updatedCart.items().size());
                 cartBackupRepository.saveOrUpdate(updatedCart);
+                Counter.builder("cart.backup.triggered_total")
+                        .description("Número de veces que se activó el backup de carrito a MongoDB")
+                        .register(meterRegistry)
+                        .increment();
             } catch (Exception e) {
                 log.warn("Backup cart failed (non-critical) [userId={}] — {}", userId, e.getMessage());
                 // best-effort — Redis ya tiene el estado correcto
             }
         }
 
-
         triggerAiSuggestions(userId, updatedCart);
+
+        // Métricas de éxito
+        Counter.builder("cart.items.added_total")
+                .description("Total de ítems añadidos al carrito")
+                .tag("new_item", String.valueOf(existing.isEmpty()))
+                .register(meterRegistry)
+                .increment();
+        DistributionSummary.builder("cart.size")
+                .description("Número de ítems distintos en el carrito tras una operación add")
+                .register(meterRegistry)
+                .record(updatedCart.items().size());
 
         log.info("Item added successfully [userId={}, productId={}, quantity={}]",
                 userId, productId, quantity);
@@ -270,6 +294,15 @@ public class CartService implements CartUseCase {
     private boolean exceedsThreshold(Cart cart) {
         return cart.totalValue().compareTo(BACKUP_VALUE_THRESHOLD) > 0
                 || cart.items().size() > BACKUP_ITEM_THRESHOLD;
+    }
+
+    private void cartError(String errorType) {
+        Counter.builder("cart.errors_total")
+                .description("Total de errores en operaciones de carrito por tipo")
+                .tag("operation", "add_item")
+                .tag("type", errorType)
+                .register(meterRegistry)
+                .increment();
     }
 
     private void triggerAiSuggestions(String userId, Cart cart) {

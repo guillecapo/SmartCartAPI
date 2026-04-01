@@ -1,0 +1,594 @@
+{
+  "info": {
+    "name": "SmartCartAPI — Observabilidad",
+    "description": "Collection para validar el flujo POST /v1/carts/products y verificar métricas/trazas implementadas con Micrometer + Prometheus + Zipkin.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",           "value": "http://localhost:8080" },
+    { "key": "authToken",         "value": "" },
+    { "key": "productLaptop",     "value": "prod-001" },
+    { "key": "productMonitor",    "value": "prod-002" },
+    { "key": "productKeyboard",   "value": "prod-003" },
+    { "key": "productNoStock",    "value": "prod-005" },
+    { "key": "productFake",       "value": "prod-999" }
+  ],
+  "item": [
+
+    {
+      "name": "🔐 Auth",
+      "item": [
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/register", "host": ["{{baseUrl}}"], "path": ["auth","register"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@smartcart.com\",\n  \"password\": \"password123\",\n  \"name\": \"Test User\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                "const json = pm.response.json();",
+                "if (json.token) {",
+                "  pm.collectionVariables.set('authToken', json.token);",
+                "  console.log('Token guardado:', json.token.substring(0,30) + '...');",
+                "}"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{baseUrl}}/auth/login", "host": ["{{baseUrl}}"], "path": ["auth","login"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"test@smartcart.com\",\n  \"password\": \"password123\"\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('Retorna token', () => pm.expect(json.token).to.be.a('string'));",
+                "pm.collectionVariables.set('authToken', json.token);",
+                "console.log('✅ Token guardado automáticamente');"
+              ]
+            }
+          }]
+        }
+      ]
+    },
+
+    {
+      "name": "🛒 Cart — Flujo principal",
+      "item": [
+        {
+          "name": "GET Cart (vacío al inicio)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1/carts", "host": ["{{baseUrl}}"], "path": ["v1","carts"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('200 o 404 (carrito puede no existir aún)', () => {",
+                "  pm.expect([200, 404]).to.include(pm.response.code);",
+                "});"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Laptop (happy path) ★",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productLaptop}}\",\n  \"quantity\": 1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('Carrito tiene items', () => pm.expect(json.items.length).to.be.above(0));",
+                "pm.test('Item es Laptop', () => pm.expect(json.items[0].productId).to.eql('prod-001'));",
+                "console.log('📊 Métrica disparada: cart_items_added_total{new_item=true}');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Monitor (segundo producto)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productMonitor}}\",\n  \"quantity\": 2\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('Carrito tiene 2 productos distintos', () => pm.expect(json.items.length).to.eql(2));",
+                "console.log('📊 Métrica: cart_size registró', json.items.length, 'items');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Laptop otra vez (incrementa cantidad)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productLaptop}}\",\n  \"quantity\": 1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "const laptop = json.items.find(i => i.productId === 'prod-001');",
+                "pm.test('Cantidad de Laptop es 2', () => pm.expect(laptop.quantity).to.eql(2));",
+                "console.log('📊 Métrica: cart_items_added_total{new_item=false} — producto ya existía');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Idempotency (mismo key, no duplica) ★",
+          "event": [{
+            "listen": "prerequest",
+            "script": {
+              "exec": [
+                "// Usamos una key fija para demostrar idempotencia",
+                "pm.collectionVariables.set('fixedIdempotencyKey', 'idem-key-demo-001');"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{fixedIdempotencyKey}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productKeyboard}}\",\n  \"quantity\": 1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200 (primera vez o respuesta cacheada)', () => pm.response.to.have.status(200));",
+                "console.log('👉 Ejecuta este request DOS veces con el mismo Idempotency-Key: idem-key-demo-001');",
+                "console.log('👉 El carrito NO debería cambiar en la segunda ejecución (idempotencia).');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "GET Cart (verifica estado actual)",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": { "raw": "{{baseUrl}}/v1/carts", "host": ["{{baseUrl}}"], "path": ["v1","carts"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "console.log('Carrito actual:', JSON.stringify(json.items.map(i => ({",
+                "  product: i.productId, qty: i.quantity",
+                "}))));"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "DELETE Remove Item — Monitor",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/v1/carts/products/{{productMonitor}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["v1","carts","products","{{productMonitor}}"]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"quantity\": 1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));"
+              ]
+            }
+          }]
+        }
+      ]
+    },
+
+    {
+      "name": "⚠️ Cart — Errores (disparan cart_errors_total)",
+      "item": [
+        {
+          "name": "POST Add Item — Cantidad inválida (quantity=0)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productLaptop}}\",\n  \"quantity\": 0\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                "console.log('📊 Métrica disparada: cart_errors_total{operation=add_item,type=invalid_quantity}');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Cantidad negativa (quantity=-1)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productLaptop}}\",\n  \"quantity\": -1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                "console.log('📊 Métrica: cart_errors_total{type=invalid_quantity} +1');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "POST Add Item — Producto inexistente",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Content-Type",    "value": "application/json" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/carts/products", "host": ["{{baseUrl}}"], "path": ["v1","carts","products"] },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"productId\": \"{{productFake}}\",\n  \"quantity\": 1\n}"
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                "console.log('📊 Métrica: cart_errors_total{type=product_not_found}');"
+              ]
+            }
+          }]
+        }
+      ]
+    },
+
+    {
+      "name": "💳 Checkout",
+      "item": [
+        {
+          "name": "POST Checkout",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",   "value": "Bearer {{authToken}}" },
+              { "key": "Idempotency-Key", "value": "{{$randomUUID}}" }
+            ],
+            "url": { "raw": "{{baseUrl}}/v1/checkout", "host": ["{{baseUrl}}"], "path": ["v1","checkout"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('200 confirmado o 422 sin stock', () => {",
+                "  pm.expect([200, 400, 422]).to.include(pm.response.code);",
+                "});",
+                "if (pm.response.code === 200) {",
+                "  const json = pm.response.json();",
+                "  pm.test('Order tiene ID', () => pm.expect(json.orderId).to.be.a('string'));",
+                "  console.log('✅ Order confirmado:', json.orderId);",
+                "} else if (pm.response.code === 422) {",
+                "  console.log('⚠️ Ítems sin stock removidos — ejecuta Checkout de nuevo');",
+                "}"
+              ]
+            }
+          }]
+        }
+      ]
+    },
+
+    {
+      "name": "📊 Observabilidad — Validación",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/actuator/health", "host": ["{{baseUrl}}"], "path": ["actuator","health"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('App está UP', () => pm.expect(json.status).to.eql('UP'));"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Prometheus — Métricas raw ★",
+          "request": {
+            "method": "GET",
+            "url": { "raw": "{{baseUrl}}/actuator/prometheus", "host": ["{{baseUrl}}"], "path": ["actuator","prometheus"] }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const body = pm.response.text();",
+                "",
+                "// Métricas del IMPLEMENTER — deben existir si se llamó al menos una vez",
+                "pm.test('Métrica cart_items_added_total presente', () => {",
+                "  pm.expect(body).to.include('cart_items_added_total');",
+                "});",
+                "pm.test('Métrica cart_errors_total presente', () => {",
+                "  pm.expect(body).to.include('cart_errors_total');",
+                "});",
+                "pm.test('Métrica cart_size presente', () => {",
+                "  pm.expect(body).to.include('cart_size');",
+                "});",
+                "pm.test('Span timer cart_service_seconds presente (@Observed)', () => {",
+                "  pm.expect(body).to.include('cart_service_seconds');",
+                "});",
+                "",
+                "// Extrae valor del counter de items añadidos para mostrar en consola",
+                "const match = body.match(/cart_items_added_total\\{[^}]*\\}\\s+([\\d.]+)/);",
+                "if (match) console.log('📈 cart_items_added_total =', match[1]);"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Micrometer — cart.items.added_total",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics/cart.items.added_total",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator","metrics","cart.items.added_total"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('Tiene measurements', () => pm.expect(json.measurements).to.be.an('array'));",
+                "const total = json.measurements.find(m => m.statistic === 'COUNT');",
+                "pm.test('COUNT > 0 (al menos un item fue añadido)', () => pm.expect(total.value).to.be.above(0));",
+                "console.log('📊 Items añadidos al carrito (total):', total?.value);"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Micrometer — cart.errors_total",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics/cart.errors_total",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator","metrics","cart.errors_total"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "const total = json.measurements.find(m => m.statistic === 'COUNT');",
+                "pm.test('COUNT > 0 (al menos un error fue disparado)', () => pm.expect(total.value).to.be.above(0));",
+                "console.log('📊 Errores de carrito (total):', total?.value);",
+                "console.log('📊 Tags disponibles:', JSON.stringify(json.availableTags));"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Micrometer — cart.size (distribution)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics/cart.size",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator","metrics","cart.size"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "const max = json.measurements.find(m => m.statistic === 'MAX');",
+                "const count = json.measurements.find(m => m.statistic === 'COUNT');",
+                "console.log('📊 Tamaño máximo de carrito observado:', max?.value);",
+                "console.log('📊 Número de operaciones add registradas:', count?.value);"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Micrometer — cart.service (spans @Observed)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics/cart.service",
+              "host": ["{{baseUrl}}"],
+              "path": ["actuator","metrics","cart.service"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "// Nota: el nombre exacto puede ser 'cart.service' o con sufijo según convención Micrometer",
+                "pm.test('Status 200 o 404 (nombre varía por versión)', () => {",
+                "  pm.expect([200, 404]).to.include(pm.response.code);",
+                "});",
+                "if (pm.response.code === 200) {",
+                "  const json = pm.response.json();",
+                "  console.log('📊 Timer de CartService (@Observed):', JSON.stringify(json.measurements));",
+                "} else {",
+                "  console.log('👉 Prueba con: /actuator/metrics/cart.service.seconds (sufijo Prometheus)');",
+                "}"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Zipkin — Trazas recientes ★",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:9411/api/v2/services",
+              "raw": "http://localhost:9411/api/v2/services",
+              "host": ["http://localhost:9411"],
+              "path": ["api","v2","services"]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Zipkin responde', () => pm.response.to.have.status(200));",
+                "const json = pm.response.json();",
+                "pm.test('Servicio smartcart registrado', () => {",
+                "  pm.expect(json).to.include('smartcart');",
+                "});",
+                "console.log('🔍 Servicios en Zipkin:', JSON.stringify(json));",
+                "console.log('👉 Abre http://localhost:9411 para ver las trazas visualmente');"
+              ]
+            }
+          }]
+        },
+        {
+          "name": "Zipkin — Trazas del servicio smartcart",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://localhost:9411/api/v2/traces?serviceName=smartcart&limit=10",
+              "host": ["http://localhost:9411"],
+              "path": ["api","v2","traces"],
+              "query": [
+                { "key": "serviceName", "value": "smartcart" },
+                { "key": "limit",       "value": "10" }
+              ]
+            }
+          },
+          "event": [{
+            "listen": "test",
+            "script": {
+              "exec": [
+                "pm.test('Zipkin responde', () => pm.response.to.have.status(200));",
+                "const traces = pm.response.json();",
+                "pm.test('Hay al menos una traza', () => pm.expect(traces.length).to.be.above(0));",
+                "if (traces.length > 0) {",
+                "  const firstTrace = traces[0];",
+                "  const spans = firstTrace.map(s => s.name);",
+                "  console.log('🔍 Spans en primera traza:', JSON.stringify(spans));",
+                "  const hasCartSpan = spans.some(s => s.includes('cart'));",
+                "  pm.test('Hay span de CartService', () => pm.expect(hasCartSpan).to.be.true);",
+                "}"
+              ]
+            }
+          }]
+        }
+      ]
+    }
+
+  ]
+}
